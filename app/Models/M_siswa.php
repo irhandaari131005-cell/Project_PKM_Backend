@@ -21,6 +21,7 @@ class M_siswa extends Model
         'type',
         'created_date',
         'update_date',
+        'nis',
         // Field profil (bisa diedit sendiri lewat /api/profile).
         'tempat_lahir',
         'tanggal_lahir',

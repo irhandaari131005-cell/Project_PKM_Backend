@@ -232,7 +232,62 @@ final class RegisterTest extends CIUnitTestCase
 
     public static function existingSnTables(): array
     {
-        return ['users' => ['users'], 'siswa' => ['siswa'], 'guru' => ['guru']];
+        // 'guru': SN milik data guru, tapi yang mendaftar bertipe siswa -> tetap ditolak.
+        // Data siswa tanpa akun dengan SN yang sama sekarang disambungkan (lihat test di bawah).
+        return ['users' => ['users'], 'guru' => ['guru']];
+    }
+
+    public function testStudentThatAlreadyHasAnAccountCannotBeClaimed(): void
+    {
+        $owner = '9e78ea4b-e635-4b6f-88dd-0eb946cc269a';
+        $this->isolatedDatabase->table('users')->insert([
+            'id_user' => $owner, 'username' => 'pemilik', 'nama' => 'Pemilik', 'password' => 'x', 'sn' => null, 'type' => 'siswa',
+        ]);
+        $this->isolatedDatabase->table('siswa')->insert([
+            'id_user' => $owner, 'nama_siswa' => 'Pemilik', 'sn' => '001234', 'type' => 'siswa', 'id_kelas' => 1,
+        ]);
+
+        $response = $this->post('/api/register', $this->validInput());
+
+        $response->assertStatus(422);
+        $this->assertSame(['sn' => 'SN sudah terdaftar.'], json_decode($response->getJSON(), true)['errors']);
+        $this->assertSame(1, $this->isolatedDatabase->table('users')->countAllResults());
+    }
+
+    public function testStudentDataWithoutAccountIsLinkedOnRegistration(): void
+    {
+        // Ditambahkan guru lewat Data Siswa: belum punya akun (id_user NULL).
+        $this->isolatedDatabase->table('siswa')->insert([
+            'id_user' => null, 'nama_siswa' => 'Nama Dari Guru', 'sn' => '001234', 'type' => 'siswa',
+            'status' => 'ACTIVE', 'id_kelas' => 1,
+        ]);
+
+        $this->post('/api/register', $this->validInput())->assertStatus(201);
+
+        $user = $this->isolatedDatabase->table('users')->get()->getRowArray();
+        $siswa = $this->isolatedDatabase->table('siswa')->get()->getResultArray();
+        $this->assertCount(1, $siswa, 'Tidak boleh membuat data siswa dobel.');
+        $this->assertSame($user['id_user'], $siswa[0]['id_user']);
+        $this->assertSame('Nama Dari Guru', $siswa[0]['nama_siswa'], 'Data dari guru dipertahankan.');
+        $this->assertSame('user_baru', $user['username']);
+    }
+
+    public function testTeacherDataWithoutAccountIsLinkedOnRegistration(): void
+    {
+        // Ditambahkan guru lewat Data Guru: id_user sementara yang tidak ada di tabel users.
+        $this->isolatedDatabase->table('guru')->insert([
+            'id_user' => '3f1d2c4b-1111-4222-8333-444455556666', 'nama' => 'Guru Dari Admin', 'sn' => '001234',
+            'type' => 'guru', 'status' => 'ACTIVE',
+        ]);
+
+        $this->post('/api/register', ['type' => 'guru'] + $this->validInput())->assertStatus(201);
+
+        $user = $this->isolatedDatabase->table('users')->get()->getRowArray();
+        $guru = $this->isolatedDatabase->table('guru')->get()->getResultArray();
+        $this->assertCount(1, $guru);
+        $this->assertSame($user['id_user'], $guru[0]['id_user']);
+        $this->assertSame('Guru Dari Admin', $guru[0]['nama']);
+        $this->assertSame(0, $this->isolatedDatabase->table('siswa')->countAllResults());
     }
 
     public function testTrimmedUsernameIsCheckedForDuplicates(): void

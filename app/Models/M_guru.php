@@ -20,6 +20,8 @@ class M_guru extends Model
         'status',
         'created_date',
         'update_date',
+        'nip',
+        'mata_pelajaran',
         // Field profil (bisa diedit sendiri lewat /api/profile).
         'tempat_lahir',
         'tanggal_lahir',
