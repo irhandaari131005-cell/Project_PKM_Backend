@@ -124,3 +124,9 @@ _modules/*
 
 /results/
 /phpunit.xml
+
+# Foto unggahan pengguna (ekstrakurikuler, dll.)
+/public/uploads/*
+!/public/uploads/ekstrakurikuler/
+/public/uploads/ekstrakurikuler/*
+!/public/uploads/ekstrakurikuler/.gitkeep
