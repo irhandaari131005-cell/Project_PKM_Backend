@@ -2,10 +2,54 @@
 
 namespace App\Controllers;
 
+use App\Models\M_absensi;
+use App\Models\M_ekstrakurikuler;
+use App\Models\M_siswa;
 use App\Models\M_users;
+use CodeIgniter\HTTP\ResponseInterface;
+use DateTimeImmutable;
+use DateTimeZone;
+use Throwable;
 
 class Dashboard extends BaseController
 {
+    /**
+     * Angka untuk kartu Dashboard: kehadiran hari ini (WIB) dan jumlah ekstrakurikuler aktif.
+     * Hanya hitungan, tanpa data pribadi, jadi aman untuk guru maupun siswa.
+     */
+    public function Ringkasan(): ResponseInterface
+    {
+        try {
+            $today = (new DateTimeImmutable('now', new DateTimeZone('Asia/Jakarta')))->format('Y-m-d');
+            $hadir = (new M_absensi())->select('id_user')->distinct()
+                ->where('tanggal', $today)->where('check_in IS NOT NULL', null, false)
+                ->countAllResults();
+
+            return $this->response->setHeader('Cache-Control', 'no-store')->setStatusCode(200)->setJSON([
+                'status' => 200,
+                'message' => 'Ringkasan dashboard berhasil diambil.',
+                'data' => [
+                    'tanggal' => $today,
+                    'kehadiran' => [
+                        'hadir_hari_ini' => $hadir,
+                        'total_siswa' => (new M_siswa())->countAllResults(),
+                    ],
+                    'ekstrakurikuler' => [
+                        'aktif' => (new M_ekstrakurikuler())->where('status', 'ACTIVE')->countAllResults(),
+                        'total' => (new M_ekstrakurikuler())->countAllResults(),
+                    ],
+                ],
+            ]);
+        } catch (Throwable $e) {
+            log_message('error', 'Ringkasan dashboard: {exception}', ['exception' => $e]);
+
+            return $this->response->setStatusCode(500)->setJSON([
+                'status' => 500,
+                'message' => 'Ringkasan dashboard belum dapat dimuat.',
+            ]);
+        }
+    }
+
     // Dashboard controller for handling dashboard related requests
     public function Dashboard()
     {
