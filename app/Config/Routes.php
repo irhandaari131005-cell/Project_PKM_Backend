@@ -46,6 +46,14 @@ $routes->put('/api/ekstrakurikuler/(:segment)', 'Ekstrakurikuler::update/$1');
 $routes->patch('/api/ekstrakurikuler/(:segment)', 'Ekstrakurikuler::update/$1');
 $routes->delete('/api/ekstrakurikuler/(:segment)', 'Ekstrakurikuler::delete/$1');
 
+// CRUD jadwal pelajaran (baca: guru & siswa login, tulis: guru). Bentrok kelas/guru/ruangan -> 409.
+$routes->get('/api/jadwal', 'Jadwal::index');
+$routes->get('/api/jadwal/(:segment)', 'Jadwal::show/$1');
+$routes->post('/api/jadwal', 'Jadwal::create');
+$routes->put('/api/jadwal/(:segment)', 'Jadwal::update/$1');
+$routes->patch('/api/jadwal/(:segment)', 'Jadwal::update/$1');
+$routes->delete('/api/jadwal/(:segment)', 'Jadwal::delete/$1');
+
 // CRUD data kelas (baca: guru & siswa login, tulis: guru). /api/data_kelas tetap publik untuk form register.
 $routes->get('/api/kelas', 'Kelas::index');
 $routes->get('/api/kelas/(:segment)', 'Kelas::show/$1');
