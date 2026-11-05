@@ -30,6 +30,8 @@ $routes->patch('/api/profile', 'Profile::update');
 
 // routes untuk dashboard
 $routes->get('/api/dashboard', 'Dashboard::Dashboard');
+// Angka kartu Dashboard: kehadiran hari ini + ekskul aktif.
+$routes->get('/api/dashboard/ringkasan', 'Dashboard::Ringkasan');
 
 // routes untuk siswa, kelas & guru
 $routes->get('/api/data_siswa', 'Data_siswa::DataSiswa');
