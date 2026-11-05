@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Libraries\SchoolMembers;
 use App\Models\M_guru;
 use App\Models\M_siswa;
 use App\Models\M_users;
@@ -60,7 +61,8 @@ class Auth extends BaseController
                 'sn' => [
                     'required', 'string', 'max_length[50]',
                     'regex_match[/\A[^\x00-\x1F\x7F]+\z/u]',
-                    'is_unique[users.sn]', 'is_unique[siswa.sn]', 'is_unique[guru.sn]',
+                    // SN di tabel siswa/guru dicek terpisah di bawah: data tanpa akun boleh diklaim.
+                    'is_unique[users.sn]',
                 ],
                 'type' => 'required|string|in_list[siswa,guru]',
             ];
@@ -81,6 +83,18 @@ class Auth extends BaseController
                     'status' => 422,
                     'message' => 'Validasi gagal',
                     'errors' => ['password' => 'Password harus terdiri dari 8 sampai 72 byte dan tidak boleh mengandung karakter null.'],
+                ]);
+            }
+
+            // Data siswa/guru yang ditambahkan guru (tanpa akun) dengan SN dan tipe yang sama
+            // akan disambungkan ke akun baru. SN milik data lain (sudah berakun / tipe beda) ditolak.
+            $members = new SchoolMembers(db_connect());
+            $claim = $members->claimable($input['sn'], $input['type']);
+            if ($claim === null && $members->cardInUse($input['sn'])) {
+                return $this->response->setStatusCode(422)->setJSON([
+                    'status' => 422,
+                    'message' => 'Validasi gagal',
+                    'errors' => ['sn' => 'SN sudah terdaftar.'],
                 ]);
             }
 
@@ -108,6 +122,21 @@ class Auth extends BaseController
                 throw new RuntimeException('Model gagal menyimpan user.');
             }
             $profile['id_user'] = $userId;
+
+            if ($claim !== null) {
+                // Data dari guru dipertahankan (nama, NIS/NIP, kelas); hanya akunnya yang disambungkan.
+                $members->link($claim, (string) $userId, $now);
+                if (! $db->transStatus() || ! $db->transCommit()) {
+                    throw new RuntimeException('Data siswa/guru gagal disambungkan.');
+                }
+                $transactionStarted = false;
+
+                return $this->response->setStatusCode(201)->setJSON([
+                    'status' => 201,
+                    'message' => 'Registrasi berhasil. Akun disambungkan ke data ' . $input['type'] . ' yang sudah terdaftar.',
+                    'redirect' => '/login',
+                ]);
+            }
 
             if ($input['type'] === 'siswa') {
                 $profileModel = new M_siswa($db);

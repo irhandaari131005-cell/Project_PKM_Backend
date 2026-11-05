@@ -33,6 +33,9 @@ $routes->get('/api/dashboard', 'Dashboard::Dashboard');
 
 // routes untuk siswa, kelas & guru
 $routes->get('/api/data_siswa', 'Data_siswa::DataSiswa');
+// Tambah Siswa/Guru (khusus guru): data tanpa akun, akun nyusul lewat registrasi dengan SN yang sama.
+$routes->post('/api/data_siswa', 'Data_siswa::create');
+$routes->post('/api/data_guru', 'Data_guru::create');
 $routes->get('/api/data_kelas', 'Data_siswa::DataKelas');
 $routes->get('/api/data_guru', 'Data_guru::DataGuru');
 

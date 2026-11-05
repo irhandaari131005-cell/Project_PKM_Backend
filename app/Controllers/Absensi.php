@@ -320,7 +320,10 @@ class Absensi extends BaseController
     {
         $userId = M_users::normalizeId($student['id_user'] ?? null);
         if ($userId === null || (new M_users())->find($userId) === null) {
-            return $this->respond(409, 'Data siswa belum terhubung ke akun yang valid. Perbaiki id_user siswa terlebih dahulu.');
+            // Biasanya siswa yang ditambahkan lewat Data Siswa dan belum mendaftar akun.
+            $nama = is_string($student['nama_siswa'] ?? null) ? $student['nama_siswa'] : 'Siswa ini';
+
+            return $this->respond(409, "{$nama} belum punya akun. Minta siswa mendaftar dengan kartu ini terlebih dahulu, lalu tap ulang.");
         }
         if (! $this->validSn($student['sn'] ?? null)) {
             return $this->respond(409, 'Data kartu siswa tidak valid. sn harus berisi maksimal 50 karakter tanpa karakter kontrol.');
