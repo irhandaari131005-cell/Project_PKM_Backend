@@ -31,6 +31,16 @@ $routes->get('/api/data_siswa', 'Data_siswa::DataSiswa');
 $routes->get('/api/data_kelas', 'Data_siswa::DataKelas');
 $routes->get('/api/data_guru', 'Data_guru::DataGuru');
 
+// CRUD ekstrakurikuler + foto (baca: guru & siswa login, tulis: guru).
+// Update dengan foto dikirim sebagai POST multipart + _method=PUT. Route /foto harus di atas (:segment).
+$routes->get('/api/ekstrakurikuler', 'Ekstrakurikuler::index');
+$routes->get('/api/ekstrakurikuler/foto', 'Ekstrakurikuler::photos');
+$routes->get('/api/ekstrakurikuler/(:segment)', 'Ekstrakurikuler::show/$1');
+$routes->post('/api/ekstrakurikuler', 'Ekstrakurikuler::create');
+$routes->put('/api/ekstrakurikuler/(:segment)', 'Ekstrakurikuler::update/$1');
+$routes->patch('/api/ekstrakurikuler/(:segment)', 'Ekstrakurikuler::update/$1');
+$routes->delete('/api/ekstrakurikuler/(:segment)', 'Ekstrakurikuler::delete/$1');
+
 // CRUD data kelas (baca: guru & siswa login, tulis: guru). /api/data_kelas tetap publik untuk form register.
 $routes->get('/api/kelas', 'Kelas::index');
 $routes->get('/api/kelas/(:segment)', 'Kelas::show/$1');
