@@ -36,7 +36,8 @@ class ApiAccessFilter implements FilterInterface
 
         $type = session()->get('auth_user')['type'];
         // Siswa hanya bisa melihat (GET/HEAD) di semua API; tambah/ubah/hapus khusus guru.
-        if ($type !== 'guru' && ! in_array($method, ['GET', 'HEAD'], true)) {
+        // Pengecualian: siswa boleh mengubah profilnya sendiri (identitas diambil dari sesi).
+        if ($type !== 'guru' && ! in_array($method, ['GET', 'HEAD'], true) && $path !== 'api/profile') {
             return service('response')->setHeader('Cache-Control', 'no-store')->setStatusCode(403)->setJSON([
                 'status' => 403,
                 'message' => 'Akses ditolak. Akun siswa hanya dapat melihat data.',

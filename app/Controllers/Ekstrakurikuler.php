@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Libraries\PhotoUpload;
 use App\Models\M_ekstrakurikuler;
 use App\Models\M_ekstrakurikuler_foto;
 use App\Models\M_guru;
@@ -23,8 +24,6 @@ class Ekstrakurikuler extends BaseController
 {
     private const PER_PAGE = 25;
     private const MAX_PHOTOS = 5;
-    private const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
-    private const PHOTO_TYPES = ['image/jpeg' => 'jpg', 'image/webp' => 'webp'];
     private const PHOTO_URL_PATH = 'uploads/ekstrakurikuler/';
     private const DAYS = ['senin', 'selasa', 'rabu', 'kamis', 'jumat', 'sabtu', 'minggu'];
     private const STATUSES = ['ACTIVE', 'INACTIVE'];
@@ -214,8 +213,7 @@ class Ekstrakurikuler extends BaseController
                 (new M_ekstrakurikuler_foto())->whereIn('id_foto', $removeIds)->delete();
             }
             foreach ($files as $file) {
-                $name = bin2hex(random_bytes(16)) . '.' . self::PHOTO_TYPES[$file->getMimeType()];
-                $file->move($this->photoDir(), $name);
+                $name = PhotoUpload::store($file, $this->photoDir());
                 $moved[] = $name;
                 (new M_ekstrakurikuler_foto())->insert(['id_ekstrakurikuler' => $id, 'file_name' => $name]);
             }
@@ -320,18 +318,9 @@ class Ekstrakurikuler extends BaseController
             return [[], ['foto' => 'Pilih maksimal ' . self::MAX_PHOTOS . ' foto per kegiatan.']];
         }
         foreach ($files as $file) {
-            if (in_array($file->getError(), [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)
-                || ($file->isValid() && $file->getSize() > self::MAX_PHOTO_BYTES)) {
-                return [[], ['foto' => 'Ukuran foto maksimal 2 MB per file.']];
-            }
-            if (! $file->isValid()) {
-                return [[], ['foto' => 'Foto gagal diunggah. Silakan coba lagi.']];
-            }
-            // Cek isi file sungguhan (bukan sekadar ekstensi/header dari browser).
-            $mime = $file->getMimeType();
-            $image = @getimagesize($file->getTempName());
-            if (! isset(self::PHOTO_TYPES[$mime]) || $image === false || ($image['mime'] ?? null) !== $mime) {
-                return [[], ['foto' => 'Format foto harus WebP, JPG, atau JPEG.']];
+            $error = PhotoUpload::validate($file);
+            if ($error !== null) {
+                return [[], ['foto' => $error]];
             }
         }
 
@@ -456,12 +445,7 @@ class Ekstrakurikuler extends BaseController
 
     private function removeFiles(array $names): void
     {
-        foreach ($names as $name) {
-            // Nama file selalu buatan server (hex + ekstensi); tolak apa pun selain itu.
-            if (is_string($name) && preg_match('/\A[0-9a-f]{32}\.(jpg|webp)\z/', $name)) {
-                @unlink($this->photoDir() . $name);
-            }
-        }
+        PhotoUpload::remove($this->photoDir(), $names);
     }
 
     /** null = tidak dikirim, false = bukan teks, string = nilai yang sudah di-trim. */

@@ -23,6 +23,11 @@ $routes->post('/api/absensi/tap', 'Absensi::tap');
 $routes->post('/api/absensi/check-in', 'Absensi::checkIn');
 $routes->post('/api/absensi/check-out', 'Absensi::checkOut');
 
+// Profil Saya (guru & siswa mengubah profilnya sendiri). Update dengan foto: POST multipart + _method=PUT.
+$routes->get('/api/profile', 'Profile::show');
+$routes->put('/api/profile', 'Profile::update');
+$routes->patch('/api/profile', 'Profile::update');
+
 // routes untuk dashboard
 $routes->get('/api/dashboard', 'Dashboard::Dashboard');
 
