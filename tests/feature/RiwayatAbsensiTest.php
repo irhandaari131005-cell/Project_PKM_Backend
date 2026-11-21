@@ -159,6 +159,69 @@ final class RiwayatAbsensiTest extends CIUnitTestCase
         ];
     }
 
+    public function testDateRangeAndStudentSearchReturnWeeklyRecap(): void
+    {
+        $this->isolatedDatabase->query('ALTER TABLE history_siswa ADD COLUMN nis TEXT');
+        $this->isolatedDatabase->table('siswa')->where('id_siswa', 1)->update(['nis' => 'NIS-0001']);
+        $start = $this->daysAgo(6);
+        foreach ([1, 3] as $ago) {
+            $this->addAttendance(1, $this->daysAgo($ago), "akbar-{$ago}");
+        }
+
+        foreach (['search=akb', 'search=nis-0001', 'search=AKBAR'] as $query) {
+            $body = $this->json("/api/absensi/riwayat?dari={$start}&sampai={$this->today}&{$query}");
+            $this->assertSame(3, $body['meta']['total'], $query);
+            $this->assertSame([$this->today, $this->daysAgo(1), $this->daysAgo(3)], array_column($body['data'], 'tanggal'), 'Terbaru dulu.');
+            $this->assertSame([['id_siswa' => 1, 'nama_siswa' => 'Akbar', 'id_kelas' => 1, 'nama_kelas' => 'X RPL 1', 'jumlah_hadir' => 3]],
+                $body['rekap']['siswa']);
+            $this->assertSame(['dari' => $start, 'sampai' => $this->today, 'jumlah_hari' => 7], array_intersect_key(
+                $body['rekap'], ['dari' => 1, 'sampai' => 1, 'jumlah_hari' => 1]));
+            $this->assertSame(1, $body['rekap']['total_siswa']);
+        }
+        // Hari tercatat = tanggal yang punya absensi di sekolah pada rentang itu (hari ini, 1 & 3 hari lalu).
+        $this->assertSame(3, $this->json("/api/absensi/riwayat?dari={$start}&sampai={$this->today}")['rekap']['hari_tercatat']);
+        // % dicari sebagai teks biasa.
+        $this->assertSame([], $this->json("/api/absensi/riwayat?dari={$start}&sampai={$this->today}&search=%25")['rekap']['siswa']);
+    }
+
+    public function testRecapIncludesStudentsWhoNeverAttendedInTheRange(): void
+    {
+        $body = $this->json("/api/absensi/riwayat?id_kelas=1&dari={$this->today}&sampai={$this->today}");
+        $this->assertSame(['Akbar' => 1, 'Citra' => 0], array_column($body['rekap']['siswa'], 'jumlah_hadir', 'nama_siswa'));
+        $this->assertSame(['Akbar'], array_column($body['data'], 'nama_siswa'));
+        // Hanya satu ujung rentang yang dikirim: dianggap satu hari.
+        $this->assertSame(1, $this->json('/api/absensi/riwayat?dari=2000-01-01')['rekap']['jumlah_hari']);
+    }
+
+    public function testStudentRecapIsLimitedToThemselves(): void
+    {
+        $this->withSession(['auth_user' => ['id_user' => $this->userUuid(1), 'type' => 'siswa']]);
+        $this->isolatedDatabase->table('users')->where('id_user', $this->userUuid(1))->update(['type' => 'siswa']);
+        $body = $this->json("/api/absensi/riwayat?dari={$this->daysAgo(6)}&sampai={$this->today}");
+        $this->assertSame(['Akbar'], array_column($body['rekap']['siswa'], 'nama_siswa'));
+        $this->assertSame(['Akbar'], array_column($body['data'], 'nama_siswa'));
+    }
+
+    /** @dataProvider invalidRanges */
+    public function testInvalidRangeHasFieldErrors(string $query, string $field): void
+    {
+        $response = $this->get('/api/absensi/riwayat?' . $query);
+        $response->assertStatus(422);
+        $this->assertArrayHasKey($field, json_decode($response->getJSON(), true)['errors']);
+    }
+
+    public static function invalidRanges(): array
+    {
+        return [
+            'end before start' => ['dari=2026-11-10&sampai=2026-11-01', 'sampai'],
+            'too long' => ['dari=2026-01-01&sampai=2026-06-01', 'sampai'],
+            'bad start' => ['dari=2026-02-30&sampai=2026-03-01', 'dari'],
+            'bad end' => ['dari=2026-03-01&sampai=kemarin', 'sampai'],
+            'long search' => ['search=' . str_repeat('a', 101), 'search'],
+            'array search' => ['search[]=a', 'search'],
+        ];
+    }
+
     public function testDatabaseFailureReturnsGenericJsonError(): void
     {
         $this->isolatedDatabase->query('DROP TABLE history_absensi');
@@ -174,10 +237,23 @@ final class RiwayatAbsensiTest extends CIUnitTestCase
         return sprintf('00000000-0000-4000-8000-%012d', $studentId);
     }
 
-    private function addAttendance(int $studentId, string $date): void
+    private function json(string $url): array
+    {
+        $response = $this->get($url);
+        $response->assertStatus(200);
+
+        return json_decode($response->getJSON(), true, 512, JSON_THROW_ON_ERROR);
+    }
+
+    private function daysAgo(int $days): string
+    {
+        return (new DateTimeImmutable($this->today, new DateTimeZone('Asia/Jakarta')))->modify("-{$days} days")->format('Y-m-d');
+    }
+
+    private function addAttendance(int $studentId, string $date, ?string $id = null): void
     {
         $this->isolatedDatabase->table('absensi')->insert([
-            'id_absensi' => sprintf('10000000-0000-4000-8000-%012d', $studentId),
+            'id_absensi' => $id ?? sprintf('10000000-0000-4000-8000-%012d', $studentId),
             'id_user' => $this->userUuid($studentId), 'sn' => 'SECRET_' . $studentId,
             'tanggal' => $date, 'check_in' => $date . ' 07:00:00',
             'check_out' => null, 'created_date' => $date . ' 07:00:00', 'update_date' => $date . ' 07:00:00',

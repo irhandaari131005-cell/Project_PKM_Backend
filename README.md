@@ -241,8 +241,38 @@ sesuai kebijakan aplikasi, sehingga siapa pun yang mendaftar sebagai guru
 mendapat akses guru setelah login.
 
 Frontend aktif `../PKM1` memakai profil hasil `/api/me` untuk membatasi tombol
-tambah/edit, navigasi guru dan scan, serta label role. Siswa dapat melihat
-profil, kelas, dan riwayatnya. Opsi login yang tersedia adalah siswa dan guru.
+tambah/edit/hapus, navigasi guru dan scan, serta label role. Siswa dapat melihat
+profil, kelas, riwayat absensinya, jadwal pelajaran, dan ekstrakurikuler (lihat saja).
+Opsi login yang tersedia adalah siswa dan guru. Halaman login menyediakan
+"Lupa password?" yang memanggil `PATCH /api/forgot_password`.
+
+Saat registrasi menyambungkan akun ke data siswa/guru yang sudah diinput guru
+(SN dan tipe sama), nama akun (`users.nama`) mengikuti nama pada data tersebut,
+sehingga nama di dashboard sama dengan Data Siswa/Guru, Profil, wali kelas, dan jadwal.
+Pesan validasi registrasi (`errors` per field) berbahasa Indonesia dan aman
+ditampilkan langsung di bawah input form.
+
+## API ubah & hapus data siswa/guru
+
+Khusus guru (siswa mendapat 403). Body JSON atau form-urlencoded; field yang tidak dikirim tidak berubah.
+
+| Method & path | Field | Keterangan |
+| --- | --- | --- |
+| `PUT`/`PATCH /api/data_siswa/{id_siswa}` | `nama_siswa`, `nis`, `id_kelas`, `sn`, `status` | 200 dengan data terbaru |
+| `DELETE /api/data_siswa/{id_siswa}` | — | 200; 409 bila siswa punya riwayat absensi |
+| `PUT`/`PATCH /api/data_guru/{id_guru}` | `nama`, `nip`, `mata_pelajaran`, `sn`, `status` | 200 dengan data terbaru |
+| `DELETE /api/data_guru/{id_guru}` | — | 200; 409 untuk data guru milik akun sendiri |
+
+- `status`: `ACTIVE` atau `INACTIVE`. Siswa `INACTIVE` ditolak saat tap/check-in absensi (409).
+- NIS/NIP dan `sn` harus unik (selain milik data itu sendiri), duplikat → 422 dengan `errors` per field.
+  `sn` kosong/`null` menghapus kartu, kecuali orangnya sudah punya akun (wajib, 422).
+- Bila orangnya sudah punya akun, `users.nama` dan `users.sn` ikut diperbarui (header, Lupa password,
+  dan absensi tetap konsisten).
+- Hapus juga menghapus akun login orang tersebut. Siswa yang sudah punya riwayat absensi tidak dihapus
+  agar riwayat utuh; ubah statusnya menjadi `INACTIVE`. Menghapus guru mengosongkan wali kelas, guru jadwal,
+  dan pembina ekskul yang memakainya (FK `ON DELETE SET NULL`).
+- Daftar berhalaman `GET /api/data_siswa?page=` dan `/api/data_guru?page=` menyertakan `has_account`
+  (true/false) untuk form edit di frontend.
 
 ## API forgot password berdasarkan SN
 
@@ -318,6 +348,36 @@ dimulai dari 1; tiap halaman berisi maksimal 25 catatan. Respons memuat
 `data: []` dan `meta` dengan `current_page`, `last_page`, `per_page`, `total`,
 `from`, dan `to`. Daftar kosong tetap mendapat HTTP 200, filter tidak valid
 422 beserta `errors` per field, dan kegagalan database mendapat JSON 500.
+
+### Rentang tanggal, cari murid, dan rekap kehadiran
+
+Halaman Riwayat memakai 4 filter: `id_kelas`, `search` (nama atau NIS, maks. 100 karakter),
+`dari` dan `sampai` (`YYYY-MM-DD`, maksimal 92 hari; `sampai` tidak boleh sebelum `dari`).
+Contoh: `/api/absensi/riwayat?search=andi&dari=2026-11-16&sampai=2026-11-21`.
+Bila `dari`/`sampai` dikirim, `tanggal` diabaikan; catatan diurutkan dari tanggal terbaru.
+
+Respons juga memuat `rekap` untuk menjawab "murid ini hadir berapa kali":
+
+```json
+"rekap": {
+  "dari": "2026-11-16", "sampai": "2026-11-21", "jumlah_hari": 6, "hari_tercatat": 5, "total_siswa": 1,
+  "siswa": [{ "id_siswa": 1, "nama_siswa": "Andi", "id_kelas": 1, "nama_kelas": "X RPL 1", "jumlah_hadir": 4 }]
+}
+```
+
+`jumlah_hadir` = jumlah tanggal berbeda siswa itu absen masuk; siswa yang belum pernah hadir pada
+rentang tersebut tetap muncul dengan 0 (siswa `INACTIVE` tidak dihitung). `hari_tercatat` = jumlah
+tanggal yang punya catatan absensi di sekolah (perkiraan hari sekolah). Maksimal 50 siswa ditampilkan;
+`total_siswa` memberi jumlah keseluruhan. Akun siswa hanya menerima rekap dirinya sendiri.
+
+## API ringkasan dashboard
+
+`GET /api/dashboard/ringkasan` (guru & siswa login) mengembalikan `kehadiran`
+(`hadir_hari_ini`, `total_siswa`, `sudah_pulang`, `belum_hadir`), `ekstrakurikuler` (`aktif`, `total`),
+`total_guru`, `total_kelas`, `tren_kehadiran` (7 hari terakhir, `{tanggal, hari, hadir}`),
+`jadwal_hari_ini` (guru: jadwal mengajarnya; siswa: jadwal kelasnya) dan `ekskul_hari_ini`.
+Guru juga menerima `absensi_terbaru` (5 terakhir hari ini); siswa menerima `kehadiran_saya`
+(`hari_ini` dengan jam masuk/pulang, `minggu_ini` dan `bulan_ini` dalam jumlah hari).
 
 Setiap baris menyertakan `id_absensi`, `id_siswa`, `nama_siswa`, `id_kelas`,
 `nama_kelas`, `tanggal`, `check_in`, `check_out`, dan `status_kehadiran`.
