@@ -77,9 +77,32 @@ final class DashboardSummaryTest extends CIUnitTestCase
 
             $response->assertStatus(200);
             $data = json_decode($response->getJSON(), true)['data'];
-            $this->assertSame(['hadir_hari_ini' => 1, 'total_siswa' => 3], $data['kehadiran']);
+            $this->assertSame(['hadir_hari_ini' => 1, 'total_siswa' => 3, 'sudah_pulang' => 0, 'belum_hadir' => 2], $data['kehadiran']);
             $this->assertSame(['aktif' => 2, 'total' => 3], $data['ekstrakurikuler']);
+            $this->assertSame(0, $data['total_guru']);
+            // Tren 7 hari: terlama dulu, hari ini terakhir dengan 1 siswa hadir.
+            $this->assertCount(7, $data['tren_kehadiran']);
+            $this->assertSame(['tanggal' => $data['tanggal'], 'hari' => $data['hari'], 'hadir' => 1], end($data['tren_kehadiran']));
+            $this->assertSame([0, 0, 0, 0, 0, 0], array_column(array_slice($data['tren_kehadiran'], 0, 6), 'hadir'));
         }
+    }
+
+    public function testTeacherSeesLatestAttendanceAndStudentSeesOwnRecap(): void
+    {
+        $guru = json_decode($this->withHeaders([])->withBody('')
+            ->withSession(['auth_user' => ['id_user' => self::GURU, 'type' => 'guru']])
+            ->get('/api/dashboard/ringkasan')->getJSON(), true)['data'];
+        $this->assertSame(['Andi', 'Andi'], array_column($guru['absensi_terbaru'], 'nama_siswa'));
+        $this->assertArrayNotHasKey('kehadiran_saya', $guru);
+
+        $siswa = json_decode($this->withHeaders([])->withBody('')
+            ->withSession(['auth_user' => ['id_user' => self::SISWA, 'type' => 'siswa']])
+            ->get('/api/dashboard/ringkasan')->getJSON(), true)['data'];
+        $this->assertArrayNotHasKey('absensi_terbaru', $siswa, 'Siswa tidak melihat absensi siswa lain.');
+        $this->assertSame(1, $siswa['kehadiran_saya']['minggu_ini']);
+        $this->assertSame(1, $siswa['kehadiran_saya']['bulan_ini']);
+        $this->assertNotNull($siswa['kehadiran_saya']['hari_ini']['check_in']);
+        $this->assertSame([], $siswa['jadwal_hari_ini']);
     }
 
     public function testGuestIsRejected(): void

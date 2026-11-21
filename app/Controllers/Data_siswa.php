@@ -5,6 +5,8 @@ namespace App\Controllers;
 use App\Libraries\SchoolMembers;
 use App\Models\M_kelas;
 use App\Models\M_siswa;
+use App\Models\M_users;
+use CodeIgniter\Database\Exceptions\DatabaseException;
 use CodeIgniter\HTTP\ResponseInterface;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -15,6 +17,9 @@ use Throwable;
 class Data_siswa extends BaseController
 {
     private const PER_PAGE = 25;
+    /** NIS/NIP: angka, huruf, titik, strip, atau garis miring, maksimal 30 karakter. */
+    public const NIS_PATTERN = '/\A[0-9A-Za-z.\-\/]{1,30}\z/';
+    public const STATUSES = ['ACTIVE', 'INACTIVE'];
     /** Data pribadi dari "Profil Saya" + SN kartu: tidak dikirim ke akun siswa lain. */
     public const PRIVATE_FIELDS = ['sn', 'tempat_lahir', 'tanggal_lahir', 'alamat', 'no_telp', 'foto'];
 
@@ -71,7 +76,10 @@ class Data_siswa extends BaseController
 
         try {
             $db = db_connect();
-            $model = (new M_siswa())->select('siswa.*, kelas.nama_kelas')->join('kelas', 'kelas.id_kelas = siswa.id_kelas', 'left');
+            // akun_id: penanda siswa sudah punya akun login (has_account) untuk form edit/hapus.
+            $model = (new M_siswa())->select('siswa.*, kelas.nama_kelas, users.id_user AS akun_id')
+                ->join('kelas', 'kelas.id_kelas = siswa.id_kelas', 'left')
+                ->join('users', 'users.id_user = siswa.id_user', 'left');
             if (is_string($search) && trim($search) !== '') {
                 // % dan _ dari pengguna dicari sebagai teks biasa, bukan wildcard LIKE.
                 $pattern = $db->escape(mb_strtolower('%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], trim($search)) . '%'));
@@ -86,7 +94,7 @@ class Data_siswa extends BaseController
             return $this->response->setStatusCode(200)->setJSON([
                 'status' => 200,
                 'message' => 'Data berhasil diambil',
-                'data' => array_map(self::visibleRow(...), $rows),
+                'data' => array_map(static fn (array $row) => self::visibleRow(self::accountFlag($row)), $rows),
                 'meta' => [
                     'current_page' => $page,
                     'last_page' => max(1, (int) ceil($total / self::PER_PAGE)),
@@ -121,7 +129,7 @@ class Data_siswa extends BaseController
                 $errors['nama_siswa'] = 'Nama siswa wajib diisi, maksimal 100 karakter.';
             }
             $nis = self::text($input['nis'] ?? null);
-            if ($nis === null || ! preg_match('/\A[0-9A-Za-z.\-\/]{1,30}\z/', $nis)) {
+            if ($nis === null || ! preg_match(self::NIS_PATTERN, $nis)) {
                 $errors['nis'] = 'NIS wajib diisi (maksimal 30 karakter: angka, huruf, titik, strip, atau garis miring).';
             } elseif ((new M_siswa())->where('nis', $nis)->countAllResults() > 0) {
                 $errors['nis'] = 'NIS sudah dipakai siswa lain.';
@@ -162,6 +170,204 @@ class Data_siswa extends BaseController
         }
     }
 
+    /**
+     * PUT/PATCH /api/data_siswa/{id_siswa} — ubah data siswa (khusus guru, dibatasi ApiAccessFilter).
+     * Field yang tidak dikirim tidak berubah. Bila siswa sudah punya akun, nama dan nomor kartu (SN)
+     * pada akun ikut diperbarui agar login, lupa password, dan absensi tetap memakai data yang sama.
+     */
+    public function update(string $id): ResponseInterface
+    {
+        if (! self::validPositiveId($id)) {
+            return $this->respond(422, 'ID siswa tidak valid.', null, ['id_siswa' => 'ID siswa harus berupa bilangan bulat positif.']);
+        }
+        try {
+            $input = $this->input();
+        } catch (JsonException | InvalidArgumentException) {
+            return $this->respond(400, 'Body JSON harus berupa objek yang valid.');
+        }
+
+        try {
+            $db = db_connect();
+            $student = (new M_siswa())->find((int) $id);
+            if ($student === null) {
+                return $this->respond(404, 'Data siswa tidak ditemukan.');
+            }
+            $members = new SchoolMembers($db);
+            $accountId = $members->accountId($student['id_user'] ?? null);
+
+            $data = [];
+            $errors = [];
+            if (array_key_exists('nama_siswa', $input)) {
+                $nama = self::text($input['nama_siswa']);
+                if ($nama === null || $nama === '' || mb_strlen($nama) > 100 || self::hasControlChars($nama)) {
+                    $errors['nama_siswa'] = 'Nama siswa wajib diisi, maksimal 100 karakter.';
+                } else {
+                    $data['nama_siswa'] = $nama;
+                }
+            }
+            if (array_key_exists('nis', $input)) {
+                $nis = self::text($input['nis']);
+                if ($nis === null || ! preg_match(self::NIS_PATTERN, $nis)) {
+                    $errors['nis'] = 'NIS wajib diisi (maksimal 30 karakter: angka, huruf, titik, strip, atau garis miring).';
+                } elseif ((new M_siswa())->where('nis', $nis)->where('id_siswa !=', (int) $id)->countAllResults() > 0) {
+                    $errors['nis'] = 'NIS sudah dipakai siswa lain.';
+                } else {
+                    $data['nis'] = $nis;
+                }
+            }
+            if (array_key_exists('id_kelas', $input)) {
+                $kelas = is_int($input['id_kelas']) ? (string) $input['id_kelas'] : self::text($input['id_kelas']);
+                if (! is_string($kelas) || ! self::validPositiveId($kelas) || (new M_kelas())->find((int) $kelas) === null) {
+                    $errors['id_kelas'] = 'Pilih kelas dari daftar kelas yang terdaftar.';
+                } else {
+                    $data['id_kelas'] = (int) $kelas;
+                }
+            }
+            if (array_key_exists('sn', $input)) {
+                $snError = self::validateCard($input['sn'], $accountId !== null, $members, ['siswa' => (int) $id, 'users' => $accountId], $sn);
+                if ($snError !== null) {
+                    $errors['sn'] = $snError;
+                } else {
+                    $data['sn'] = $sn;
+                }
+            }
+            if (array_key_exists('status', $input)) {
+                $status = is_string($input['status']) ? strtoupper(trim($input['status'])) : null;
+                if (in_array($status, self::STATUSES, true)) {
+                    $data['status'] = $status;
+                } else {
+                    $errors['status'] = 'Pilih status Aktif atau Nonaktif.';
+                }
+            }
+            if ($errors !== []) {
+                return $this->respond(422, 'Validasi gagal.', null, $errors);
+            }
+            if ($data === []) {
+                return $this->respond(422, 'Validasi gagal.', null, [
+                    'nama_siswa' => 'Kirim minimal satu field: nama_siswa, nis, id_kelas, sn, atau status.',
+                ]);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('Asia/Jakarta')))->format('Y-m-d H:i:s');
+            $account = [];
+            if (isset($data['nama_siswa'])) {
+                $account['nama'] = $data['nama_siswa'];
+            }
+            if (array_key_exists('sn', $data)) {
+                $account['sn'] = $data['sn'];
+            }
+            try {
+                $db->transException(true)->transStart();
+                (new M_siswa())->update((int) $id, $data + ['update_date' => $now]);
+                if ($accountId !== null && $account !== []) {
+                    (new M_users())->update($accountId, $account + ['update_date' => $now]);
+                }
+                $db->transComplete();
+            } catch (DatabaseException $e) {
+                // Request bersamaan bisa lolos pengecekan; unique key database (NIS/SN) jadi pengaman terakhir.
+                $conflict = $this->uniqueConflicts($data, (int) $id, $accountId, $members);
+                if ($conflict !== []) {
+                    return $this->respond(422, 'Validasi gagal.', null, $conflict);
+                }
+                throw $e;
+            }
+
+            return $this->respond(200, 'Data siswa berhasil diperbarui.',
+                self::visibleRow($this->findWithClass((int) $id) + ['has_account' => $accountId !== null]));
+        } catch (Throwable $e) {
+            return $this->serverError($e);
+        }
+    }
+
+    /**
+     * DELETE /api/data_siswa/{id_siswa} — hapus data siswa (khusus guru).
+     * Akun login siswa ikut dihapus. Siswa yang sudah punya riwayat absensi tidak dihapus
+     * agar riwayat tetap utuh; ubah statusnya menjadi Nonaktif.
+     */
+    public function delete(string $id): ResponseInterface
+    {
+        if (! self::validPositiveId($id)) {
+            return $this->respond(422, 'ID siswa tidak valid.', null, ['id_siswa' => 'ID siswa harus berupa bilangan bulat positif.']);
+        }
+
+        try {
+            $db = db_connect();
+            $student = (new M_siswa())->find((int) $id);
+            if ($student === null) {
+                return $this->respond(404, 'Data siswa tidak ditemukan.');
+            }
+            $accountId = (new SchoolMembers($db))->accountId($student['id_user'] ?? null);
+            if ($accountId !== null && $db->tableExists('absensi')
+                && $db->table('absensi')->where('id_user', $accountId)->countAllResults() > 0) {
+                return $this->respond(409, 'Siswa ini sudah memiliki riwayat absensi sehingga tidak dapat dihapus. Ubah statusnya menjadi Nonaktif agar riwayat tetap tersimpan.');
+            }
+
+            $db->transException(true)->transStart();
+            (new M_siswa())->delete((int) $id);
+            if ($accountId !== null) {
+                (new M_users())->delete($accountId);
+            }
+            $db->transComplete();
+
+            return $this->respond(200, $accountId === null
+                ? 'Data siswa berhasil dihapus.'
+                : 'Data siswa beserta akun loginnya berhasil dihapus.');
+        } catch (Throwable $e) {
+            return $this->serverError($e);
+        }
+    }
+
+    /**
+     * Validasi nomor kartu (SN) untuk ubah data siswa/guru. Kosong/null = hapus kartu,
+     * kecuali orangnya sudah punya akun (SN dipakai untuk lupa password & absensi).
+     *
+     * @param array{users?: int|string|null, siswa?: int|null, guru?: string|null} $ignore
+     */
+    public static function validateCard(mixed $raw, bool $hasAccount, SchoolMembers $members, array $ignore, ?string &$sn): ?string
+    {
+        $sn = null;
+        if ($raw !== null && ! is_string($raw)) {
+            return 'Nomor kartu harus berupa teks.';
+        }
+        $value = $raw === null ? '' : trim($raw);
+        if ($value === '') {
+            return $hasAccount ? 'Nomor kartu wajib diisi karena sudah dipakai untuk akun login.' : null;
+        }
+        if (mb_strlen($value) > 50 || self::hasControlChars($value)) {
+            return 'Nomor kartu maksimal 50 karakter.';
+        }
+        if ($members->cardInUse($value, $ignore)) {
+            return 'Nomor kartu sudah dipakai.';
+        }
+        $sn = $value;
+
+        return null;
+    }
+
+    /** @return array<string, string> */
+    private function uniqueConflicts(array $data, int $id, ?string $accountId, SchoolMembers $members): array
+    {
+        $errors = [];
+        try {
+            if (isset($data['nis']) && (new M_siswa())->where('nis', $data['nis'])->where('id_siswa !=', $id)->countAllResults() > 0) {
+                $errors['nis'] = 'NIS sudah dipakai siswa lain.';
+            }
+            if (isset($data['sn']) && $members->cardInUse($data['sn'], ['siswa' => $id, 'users' => $accountId])) {
+                $errors['sn'] = 'Nomor kartu sudah dipakai.';
+            }
+        } catch (Throwable) {
+            return [];
+        }
+
+        return $errors;
+    }
+
+    private function findWithClass(int $id): ?array
+    {
+        return (new M_siswa())->select('siswa.*, kelas.nama_kelas')->join('kelas', 'kelas.id_kelas = siswa.id_kelas', 'left')
+            ->where('siswa.id_siswa', $id)->first();
+    }
+
     public function DataKelas()
     {
         $jurusan = $this->request->getGet('id_jurusan');
@@ -194,6 +400,17 @@ class Data_siswa extends BaseController
     {
         return is_string($value) && preg_match('/\A[1-9][0-9]{0,9}\z/', $value) === 1
             && (int) $value <= 2147483647;
+    }
+
+    /** Ubah kolom bantu akun_id (LEFT JOIN users) menjadi has_account: true/false. */
+    public static function accountFlag(array $row): array
+    {
+        if (array_key_exists('akun_id', $row)) {
+            $row['has_account'] = $row['akun_id'] !== null && $row['akun_id'] !== '';
+            unset($row['akun_id']);
+        }
+
+        return $row;
     }
 
     /** Akun siswa tidak menerima SN dan data pribadi orang lain. */
@@ -230,7 +447,10 @@ class Data_siswa extends BaseController
             return $decoded;
         }
 
-        return $this->request->getPost();
+        // PUT/PATCH form-urlencoded tidak masuk $_POST; baca dari body mentah.
+        return strtoupper($this->request->getMethod()) === 'POST'
+            ? $this->request->getPost()
+            : $this->request->getRawInput();
     }
 
     private function respond(int $status, string $message, ?array $data = null, ?array $errors = null): ResponseInterface

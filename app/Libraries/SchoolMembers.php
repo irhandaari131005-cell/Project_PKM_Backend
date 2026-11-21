@@ -21,16 +21,42 @@ final class SchoolMembers
     {
     }
 
-    /** SN sudah dipakai akun mana pun atau data siswa/guru mana pun. */
-    public function cardInUse(string $sn): bool
+    /**
+     * SN sudah dipakai akun mana pun atau data siswa/guru mana pun.
+     *
+     * $ignore mengecualikan baris milik orang yang sedang diedit, mis.
+     * ['siswa' => 12, 'users' => '<uuid akun>'] atau ['guru' => '<uuid>', 'users' => '<uuid>'].
+     *
+     * @param array{users?: int|string|null, siswa?: int|null, guru?: string|null} $ignore
+     */
+    public function cardInUse(string $sn, array $ignore = []): bool
     {
-        foreach (['users', 'siswa', 'guru'] as $table) {
-            if ($this->db->table($table)->where('sn', $sn)->countAllResults() > 0) {
+        $keys = ['users' => 'id_user', 'siswa' => 'id_siswa', 'guru' => 'id_user'];
+        foreach ($keys as $table => $key) {
+            $query = $this->db->table($table)->where('sn', $sn);
+            if (($ignore[$table] ?? null) !== null) {
+                $query->where("{$key} !=", $ignore[$table]);
+            }
+            if ($query->countAllResults() > 0) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /** Akun login (users.id_user) milik data siswa/guru ini, atau null bila belum punya akun. */
+    public function accountId(mixed $userId): ?string
+    {
+        if (! is_string($userId) && ! is_int($userId)) {
+            return null;
+        }
+        $userId = (string) $userId;
+        if ($userId === '') {
+            return null;
+        }
+
+        return $this->db->table('users')->where('id_user', $userId)->countAllResults() > 0 ? $userId : null;
     }
 
     /**

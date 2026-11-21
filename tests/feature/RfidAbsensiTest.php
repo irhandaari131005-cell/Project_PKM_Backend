@@ -91,6 +91,23 @@ final class RfidAbsensiTest extends CIUnitTestCase
         $this->assertSame(1, $this->isolatedDatabase->table('absensi')->countAllResults());
     }
 
+    public function testInactiveStudentCannotTapAttendance(): void
+    {
+        $this->isolatedDatabase->query('ALTER TABLE rfid_siswa ADD COLUMN status TEXT');
+        $this->isolatedDatabase->table('siswa')->where('id_siswa', 1)->update(['status' => 'INACTIVE']);
+
+        foreach (['masuk', 'pulang', null] as $mode) {
+            $response = $this->jsonPost('/api/absensi', ['sn' => '001234'] + ($mode === null ? [] : ['jenis_absensi' => $mode]));
+            $response->assertStatus(409);
+            $this->assertStringContainsString('nonaktif', $this->body($response)['message']);
+        }
+        $this->jsonPost('/api/absensi/check-in', ['id_siswa' => 1])->assertStatus(409);
+        $this->assertSame(0, $this->isolatedDatabase->table('absensi')->countAllResults());
+
+        // Siswa aktif lain tetap bisa absen.
+        $this->jsonPost('/api/absensi', ['sn' => '1234', 'jenis_absensi' => 'masuk'])->assertStatus(201);
+    }
+
     public function testPulangModeChecksOutStudentsBackToBackWithoutDelay(): void
     {
         // Siswa A dan B sudah absen masuk barusan; mode pulang langsung memproses A lalu B.

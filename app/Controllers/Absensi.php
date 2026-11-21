@@ -318,6 +318,12 @@ class Absensi extends BaseController
 
     private function studentError(array $student): ?ResponseInterface
     {
+        // Siswa yang dinonaktifkan guru (lulus/pindah) tidak dicatat absensinya.
+        if (strtoupper(trim((string) ($student['status'] ?? ''))) === 'INACTIVE') {
+            $nama = is_string($student['nama_siswa'] ?? null) ? $student['nama_siswa'] : 'Siswa ini';
+
+            return $this->respond(409, "{$nama} berstatus nonaktif sehingga tidak dapat absen. Aktifkan kembali di menu Data Siswa.");
+        }
         $userId = M_users::normalizeId($student['id_user'] ?? null);
         if ($userId === null || (new M_users())->find($userId) === null) {
             // Biasanya siswa yang ditambahkan lewat Data Siswa dan belum mendaftar akun.
