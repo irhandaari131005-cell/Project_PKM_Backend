@@ -38,6 +38,13 @@ $routes->get('/api/data_siswa', 'Data_siswa::DataSiswa');
 // Tambah Siswa/Guru (khusus guru): data tanpa akun, akun nyusul lewat registrasi dengan SN yang sama.
 $routes->post('/api/data_siswa', 'Data_siswa::create');
 $routes->post('/api/data_guru', 'Data_guru::create');
+// Ubah/hapus Siswa/Guru (khusus guru). Hapus ikut menghapus akun login orang tersebut.
+$routes->put('/api/data_siswa/(:segment)', 'Data_siswa::update/$1');
+$routes->patch('/api/data_siswa/(:segment)', 'Data_siswa::update/$1');
+$routes->delete('/api/data_siswa/(:segment)', 'Data_siswa::delete/$1');
+$routes->put('/api/data_guru/(:segment)', 'Data_guru::update/$1');
+$routes->patch('/api/data_guru/(:segment)', 'Data_guru::update/$1');
+$routes->delete('/api/data_guru/(:segment)', 'Data_guru::delete/$1');
 $routes->get('/api/data_kelas', 'Data_siswa::DataKelas');
 $routes->get('/api/data_guru', 'Data_guru::DataGuru');
 

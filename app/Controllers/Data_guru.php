@@ -6,6 +6,7 @@ use App\Libraries\SchoolMembers;
 use App\Models\M_kelas;
 use App\Models\M_guru;
 use App\Models\M_users;
+use CodeIgniter\Database\Exceptions\DatabaseException;
 use CodeIgniter\HTTP\ResponseInterface;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -31,7 +32,9 @@ class Data_guru extends BaseController
 
         try {
             $db = db_connect();
-            $model = new M_guru();
+            // akun_id: penanda guru sudah punya akun login (has_account) untuk form edit/hapus.
+            $model = (new M_guru())->select('guru.*, users.id_user AS akun_id')
+                ->join('users', 'users.id_user = guru.id_user', 'left');
             if (is_string($search) && trim($search) !== '') {
                 // % dan _ dari pengguna dicari sebagai teks biasa, bukan wildcard LIKE.
                 $pattern = $db->escape(mb_strtolower('%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], trim($search)) . '%'));
@@ -41,12 +44,12 @@ class Data_guru extends BaseController
             $total = $model->countAllResults(false);
             $page = (int) $page;
             $offset = ($page - 1) * self::PER_PAGE;
-            $rows = $model->orderBy('nama', 'ASC')->orderBy('id_user', 'ASC')->findAll(self::PER_PAGE, $offset);
+            $rows = $model->orderBy('guru.nama', 'ASC')->orderBy('guru.id_user', 'ASC')->findAll(self::PER_PAGE, $offset);
 
             return $this->response->setStatusCode(200)->setJSON([
                 'status' => 200,
                 'message' => 'Data berhasil diambil',
-                'data' => array_map(self::visibleRow(...), $rows),
+                'data' => array_map(static fn (array $row) => self::visibleRow(Data_siswa::accountFlag($row)), $rows),
                 'meta' => [
                     'current_page' => $page,
                     'last_page' => max(1, (int) ceil($total / self::PER_PAGE)),
@@ -77,7 +80,7 @@ class Data_guru extends BaseController
                 $errors['nama'] = 'Nama guru wajib diisi, maksimal 100 karakter.';
             }
             $nip = self::text($input['nip'] ?? null);
-            if ($nip === null || ! preg_match('/\A[0-9A-Za-z.\-\/]{1,30}\z/', $nip)) {
+            if ($nip === null || ! preg_match(Data_siswa::NIS_PATTERN, $nip)) {
                 $errors['nip'] = 'NIP wajib diisi (maksimal 30 karakter: angka, huruf, titik, strip, atau garis miring).';
             } elseif ((new M_guru())->where('nip', $nip)->countAllResults() > 0) {
                 $errors['nip'] = 'NIP sudah dipakai guru lain.';
@@ -114,6 +117,160 @@ class Data_guru extends BaseController
             ]);
 
             return $this->respond(201, 'Data guru berhasil ditambahkan.', self::visibleRow((new M_guru())->find($id)));
+        } catch (Throwable $e) {
+            return $this->serverError($e);
+        }
+    }
+
+    /**
+     * PUT/PATCH /api/data_guru/{id_guru} — ubah data guru (khusus guru, dibatasi ApiAccessFilter).
+     * Field yang tidak dikirim tidak berubah. Bila guru sudah punya akun, nama dan nomor kartu (SN)
+     * pada akun ikut diperbarui.
+     */
+    public function update(string $id): ResponseInterface
+    {
+        $guruId = M_users::normalizeId($id);
+        if ($guruId === null) {
+            return $this->respond(422, 'ID guru tidak valid.', null, ['id_guru' => 'ID guru tidak valid.']);
+        }
+        try {
+            $input = $this->input();
+        } catch (JsonException | InvalidArgumentException) {
+            return $this->respond(400, 'Body JSON harus berupa objek yang valid.');
+        }
+
+        try {
+            $db = db_connect();
+            $teacher = (new M_guru())->find((string) $guruId);
+            if ($teacher === null) {
+                return $this->respond(404, 'Data guru tidak ditemukan.');
+            }
+            $key = (string) $teacher['id_user'];
+            $members = new SchoolMembers($db);
+            $accountId = $members->accountId($key);
+
+            $data = [];
+            $errors = [];
+            foreach (['nama' => 'Nama guru', 'mata_pelajaran' => 'Mata pelajaran'] as $field => $label) {
+                if (! array_key_exists($field, $input)) {
+                    continue;
+                }
+                $value = self::text($input[$field]);
+                if ($value === null || $value === '' || mb_strlen($value) > 100 || self::hasControlChars($value)) {
+                    $errors[$field] = "{$label} wajib diisi, maksimal 100 karakter.";
+                } else {
+                    $data[$field] = $value;
+                }
+            }
+            if (array_key_exists('nip', $input)) {
+                $nip = self::text($input['nip']);
+                if ($nip === null || ! preg_match(Data_siswa::NIS_PATTERN, $nip)) {
+                    $errors['nip'] = 'NIP wajib diisi (maksimal 30 karakter: angka, huruf, titik, strip, atau garis miring).';
+                } elseif ((new M_guru())->where('nip', $nip)->where('id_user !=', $key)->countAllResults() > 0) {
+                    $errors['nip'] = 'NIP sudah dipakai guru lain.';
+                } else {
+                    $data['nip'] = $nip;
+                }
+            }
+            if (array_key_exists('sn', $input)) {
+                $snError = Data_siswa::validateCard($input['sn'], $accountId !== null, $members, ['guru' => $key, 'users' => $accountId], $sn);
+                if ($snError !== null) {
+                    $errors['sn'] = $snError;
+                } else {
+                    $data['sn'] = $sn;
+                }
+            }
+            if (array_key_exists('status', $input)) {
+                $status = is_string($input['status']) ? strtoupper(trim($input['status'])) : null;
+                if (in_array($status, Data_siswa::STATUSES, true)) {
+                    $data['status'] = $status;
+                } else {
+                    $errors['status'] = 'Pilih status Aktif atau Nonaktif.';
+                }
+            }
+            if ($errors !== []) {
+                return $this->respond(422, 'Validasi gagal.', null, $errors);
+            }
+            if ($data === []) {
+                return $this->respond(422, 'Validasi gagal.', null, [
+                    'nama' => 'Kirim minimal satu field: nama, nip, mata_pelajaran, sn, atau status.',
+                ]);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('Asia/Jakarta')))->format('Y-m-d H:i:s');
+            $account = array_intersect_key($data, ['nama' => true, 'sn' => true]);
+            try {
+                $db->transException(true)->transStart();
+                (new M_guru())->update($key, $data + ['update_date' => $now]);
+                if ($accountId !== null && $account !== []) {
+                    (new M_users())->update($accountId, $account + ['update_date' => $now]);
+                }
+                $db->transComplete();
+            } catch (DatabaseException $e) {
+                // Request bersamaan bisa lolos pengecekan; unique key database (NIP/SN) jadi pengaman terakhir.
+                $conflict = [];
+                if (isset($data['nip']) && (new M_guru())->where('nip', $data['nip'])->where('id_user !=', $key)->countAllResults() > 0) {
+                    $conflict['nip'] = 'NIP sudah dipakai guru lain.';
+                }
+                if (isset($data['sn']) && $members->cardInUse($data['sn'], ['guru' => $key, 'users' => $accountId])) {
+                    $conflict['sn'] = 'Nomor kartu sudah dipakai.';
+                }
+                if ($conflict !== []) {
+                    return $this->respond(422, 'Validasi gagal.', null, $conflict);
+                }
+                throw $e;
+            }
+
+            if ($accountId !== null && isset($data['nama'])
+                && (string) (session()->get('auth_user')['id_user'] ?? '') === $accountId) {
+                // Guru mengubah datanya sendiri: nama di header langsung ikut berubah.
+                session()->set('auth_user', ['nama' => $data['nama']] + session()->get('auth_user'));
+            }
+
+            return $this->respond(200, 'Data guru berhasil diperbarui.',
+                self::visibleRow((new M_guru())->find($key) + ['has_account' => $accountId !== null]));
+        } catch (Throwable $e) {
+            return $this->serverError($e);
+        }
+    }
+
+    /**
+     * DELETE /api/data_guru/{id_guru} — hapus data guru (khusus guru). Akun login guru ikut dihapus.
+     * Wali kelas, jadwal, dan pembina ekskul yang memakai guru ini menjadi kosong (FK ON DELETE SET NULL).
+     */
+    public function delete(string $id): ResponseInterface
+    {
+        $guruId = M_users::normalizeId($id);
+        if ($guruId === null) {
+            return $this->respond(422, 'ID guru tidak valid.', null, ['id_guru' => 'ID guru tidak valid.']);
+        }
+
+        try {
+            $db = db_connect();
+            $teacher = (new M_guru())->find((string) $guruId);
+            if ($teacher === null) {
+                return $this->respond(404, 'Data guru tidak ditemukan.');
+            }
+            $key = (string) $teacher['id_user'];
+            if ((string) (session()->get('auth_user')['id_user'] ?? '') === $key) {
+                return $this->respond(409, 'Anda tidak dapat menghapus data guru milik akun Anda sendiri.');
+            }
+            $accountId = (new SchoolMembers($db))->accountId($key);
+            if ($accountId !== null && $db->tableExists('absensi')
+                && $db->table('absensi')->where('id_user', $accountId)->countAllResults() > 0) {
+                return $this->respond(409, 'Akun guru ini memiliki riwayat absensi sehingga tidak dapat dihapus. Ubah statusnya menjadi Nonaktif.');
+            }
+
+            $db->transException(true)->transStart();
+            (new M_guru())->delete($key);
+            if ($accountId !== null) {
+                (new M_users())->delete($accountId);
+            }
+            $db->transComplete();
+
+            return $this->respond(200, $accountId === null
+                ? 'Data guru berhasil dihapus.'
+                : 'Data guru beserta akun loginnya berhasil dihapus.');
         } catch (Throwable $e) {
             return $this->serverError($e);
         }
@@ -157,7 +314,10 @@ class Data_guru extends BaseController
             return $decoded;
         }
 
-        return $this->request->getPost();
+        // PUT/PATCH form-urlencoded tidak masuk $_POST; baca dari body mentah.
+        return strtoupper($this->request->getMethod()) === 'POST'
+            ? $this->request->getPost()
+            : $this->request->getRawInput();
     }
 
     private function respond(int $status, string $message, ?array $data = null, ?array $errors = null): ResponseInterface
