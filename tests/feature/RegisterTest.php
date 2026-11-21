@@ -230,6 +230,27 @@ final class RegisterTest extends CIUnitTestCase
         }
     }
 
+    public function testValidationMessagesAreShownInIndonesian(): void
+    {
+        $this->post('/api/register', $this->validInput())->assertStatus(201);
+
+        $duplicate = $this->post('/api/register', array_replace($this->validInput(), [
+            'password' => 'pendek', 'password_confirmation' => 'beda',
+        ]));
+        $duplicate->assertStatus(422);
+        $errors = json_decode($duplicate->getJSON(), true)['errors'];
+        $this->assertSame('Username sudah terdaftar. Silakan pilih username lain.', $errors['username']);
+        $this->assertSame('Nomor kartu (SN) sudah terdaftar.', $errors['sn']);
+        $this->assertSame('Password minimal 8 karakter.', $errors['password']);
+        $this->assertSame('Konfirmasi password tidak cocok.', $errors['password_confirmation']);
+
+        $empty = $this->post('/api/register', []);
+        $empty->assertStatus(422);
+        foreach (json_decode($empty->getJSON(), true)['errors'] as $message) {
+            $this->assertDoesNotMatchRegularExpression('/\bfield\b|\bmust\b/i', $message, 'Pesan default CI4 berbahasa Inggris.');
+        }
+    }
+
     public static function existingSnTables(): array
     {
         // 'guru': SN milik data guru, tapi yang mendaftar bertipe siswa -> tetap ditolak.
@@ -269,6 +290,7 @@ final class RegisterTest extends CIUnitTestCase
         $this->assertCount(1, $siswa, 'Tidak boleh membuat data siswa dobel.');
         $this->assertSame($user['id_user'], $siswa[0]['id_user']);
         $this->assertSame('Nama Dari Guru', $siswa[0]['nama_siswa'], 'Data dari guru dipertahankan.');
+        $this->assertSame('Nama Dari Guru', $user['nama'], 'Nama akun (header/dashboard) sama dengan data siswa.');
         $this->assertSame('user_baru', $user['username']);
     }
 
@@ -287,6 +309,7 @@ final class RegisterTest extends CIUnitTestCase
         $this->assertCount(1, $guru);
         $this->assertSame($user['id_user'], $guru[0]['id_user']);
         $this->assertSame('Guru Dari Admin', $guru[0]['nama']);
+        $this->assertSame('Guru Dari Admin', $user['nama'], 'Nama akun (header/dashboard) sama dengan data guru.');
         $this->assertSame(0, $this->isolatedDatabase->table('siswa')->countAllResults());
     }
 

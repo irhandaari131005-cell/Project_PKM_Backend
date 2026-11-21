@@ -19,6 +19,53 @@ class Auth extends BaseController
     private const MAX_PASSWORD_FAILURES = 5;
     private const PASSWORD_FAILURE_WINDOW = 300;
 
+    /** Pesan validasi registrasi ditampilkan langsung di bawah field form, jadi pakai bahasa Indonesia. */
+    private const REGISTER_MESSAGES = [
+        'nama' => [
+            'required' => 'Nama lengkap wajib diisi.',
+            'string' => 'Nama lengkap harus berupa teks.',
+            'max_length' => 'Nama lengkap maksimal 100 karakter.',
+            'regex_match' => 'Nama lengkap tidak boleh berisi baris baru atau karakter khusus.',
+        ],
+        'username' => [
+            'required' => 'Username wajib diisi.',
+            'string' => 'Username harus berupa teks.',
+            'max_length' => 'Username maksimal 100 karakter.',
+            'regex_match' => 'Username tidak boleh berisi baris baru atau karakter khusus.',
+            'is_unique' => 'Username sudah terdaftar. Silakan pilih username lain.',
+        ],
+        'password' => [
+            'required' => 'Password wajib diisi.',
+            'string' => 'Password harus berupa teks.',
+            'min_length' => 'Password minimal 8 karakter.',
+            'max_length' => 'Password maksimal 72 karakter.',
+        ],
+        'password_confirmation' => [
+            'required' => 'Konfirmasi password wajib diisi.',
+            'string' => 'Konfirmasi password harus berupa teks.',
+            'matches' => 'Konfirmasi password tidak cocok.',
+        ],
+        'sn' => [
+            'required' => 'Nomor kartu (SN) wajib diisi.',
+            'string' => 'Nomor kartu (SN) harus berupa teks.',
+            'max_length' => 'Nomor kartu (SN) maksimal 50 karakter.',
+            'regex_match' => 'Nomor kartu (SN) tidak boleh berisi baris baru atau karakter khusus.',
+            'is_unique' => 'Nomor kartu (SN) sudah terdaftar.',
+        ],
+        'type' => [
+            'required' => 'Pilih daftar sebagai siswa atau guru.',
+            'string' => 'Pilih daftar sebagai siswa atau guru.',
+            'in_list' => 'Pilih daftar sebagai siswa atau guru.',
+        ],
+        'id_kelas' => [
+            'required' => 'Pilih kelas yang tersedia.',
+            'integer' => 'Pilih kelas yang tersedia.',
+            'greater_than' => 'Pilih kelas yang tersedia.',
+            'less_than_equal_to' => 'Pilih kelas yang tersedia.',
+            'is_not_unique' => 'Kelas yang dipilih tidak ditemukan. Muat ulang daftar kelas.',
+        ],
+    ];
+
     protected M_users $m_user;
 
     public function __construct()
@@ -70,7 +117,7 @@ class Auth extends BaseController
                 $rules['id_kelas'] = 'required|integer|greater_than[0]|less_than_equal_to[2147483647]|is_not_unique[kelas.id_kelas]';
             }
 
-            if (! $this->validateData($input, $rules)) {
+            if (! $this->validateData($input, $rules, self::REGISTER_MESSAGES)) {
                 return $this->response->setStatusCode(422)->setJSON([
                     'status' => 422,
                     'message' => 'Validasi gagal',
@@ -105,9 +152,13 @@ class Auth extends BaseController
                 'created_date' => $now,
                 'update_date' => $now,
             ];
+            // Saat mengklaim data dari sekolah, nama akun mengikuti nama di data siswa/guru agar
+            // header/dashboard sama dengan Data Siswa/Guru, Profil, wali kelas, dan jadwal.
+            $claimedName = $claim === null ? null
+                : ($claim['row'][$input['type'] === 'siswa' ? 'nama_siswa' : 'nama'] ?? null);
             $data = $profile + [
                 'username' => $input['username'],
-                'nama' => $input['nama'],
+                'nama' => is_string($claimedName) && trim($claimedName) !== '' ? $claimedName : $input['nama'],
                 'password' => password_hash($input['password'], PASSWORD_DEFAULT),
             ];
 
